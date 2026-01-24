@@ -1,8 +1,8 @@
-# gradient_descent_app.py
 import streamlit as st
 import numpy as np
 import matplotlib.pyplot as plt
 import scienceplots
+import time
 
 plt.style.use(['science', 'no-latex'])
 
@@ -249,74 +249,404 @@ def get_loss_surface():
 W, B, E = get_loss_surface()
 
 # ----------------------------
+# GRADIENT DESCENT FUNCTION
+# ----------------------------
+def run_gradient_descent(learning_rate, max_iter):
+    """Run gradient descent and return complete history at each iteration"""
+    w, b = 0.0, 0.0
+    history = [(w, b, mse_loss(x, y, w, b))]
+    
+    for i in range(max_iter):
+        dw = grad_w(x, y, w, b)
+        db = grad_b(x, y, w, b)
+        w -= learning_rate * dw
+        b -= learning_rate * db
+        history.append((w, b, mse_loss(x, y, w, b)))
+    
+    return history
+
+# ----------------------------
+# PLOTTING FUNCTION
+# ----------------------------
+def create_plot(history, show_equation=True):
+    """Create the visualization plot"""
+    hist = np.array(history)
+    w, b = hist[-1, 0], hist[-1, 1]
+    current_iter = len(history) - 1
+    
+    fig = plt.figure(figsize=(14, 5))
+    
+    # Left: Data + regression line
+    ax1 = fig.add_subplot(1, 2, 1)
+    ax1.scatter(x, y, color='#1f77b4', alpha=0.6, s=20, label='Data')
+    x_plot = np.linspace(x.min(), x.max(), 100)
+    y_plot = w * x_plot + b
+    ax1.plot(x_plot, y_plot, color='red', linewidth=2, label=f'Fit Line')
+    
+    # Add equation annotation inside the plot
+    if show_equation:
+        equation_text = f'$y = {w:.4f}x + {b:.3f}$'
+        ax1.text(0.05, 0.95, equation_text, transform=ax1.transAxes,
+                fontsize=12, verticalalignment='top',
+                bbox=dict(boxstyle='round', facecolor='wheat', alpha=0.8))
+    
+    ax1.set_xlabel("Spending")
+    ax1.set_ylabel("Sales")
+    ax1.set_title(f"Linear Regression Fit (Iteration {current_iter})")
+    ax1.legend(loc='lower right')
+    ax1.grid(True, alpha=0.3)
+    
+    # Right: 3D loss surface + GD path
+    ax2 = fig.add_subplot(1, 2, 2, projection='3d')
+    surf = ax2.plot_surface(W, B, E, cmap='viridis', alpha=0.7, edgecolor='none')
+    
+    # Plot GD trajectory
+    ax2.plot(hist[:, 0], hist[:, 1], hist[:, 2], color='red', linewidth=2.5, marker='o', markersize=3, label='GD Path')
+    
+    # Highlight current position
+    ax2.scatter([hist[-1, 0]], [hist[-1, 1]], [hist[-1, 2]], 
+                color='yellow', s=100, edgecolor='black', linewidth=2, zorder=10)
+    
+    ax2.set_xlabel("Slope (w)")
+    ax2.set_ylabel("Intercept (b)")
+    ax2.set_zlabel("MSE Loss")
+    ax2.set_title("Loss Surface & Gradient Descent Path")
+    ax2.view_init(elev=20, azim=-40)
+    
+    return fig, hist[-1, 2]
+
+# ----------------------------
 # STREAMLIT UI
 # ----------------------------
 st.set_page_config(page_title="Gradient Descent: Linear Regression", layout="wide")
 st.title("📉 Gradient Descent for Linear Regression")
 st.markdown("""
 This app demonstrates **gradient descent** to find the best-fit line for advertising data  
-by minimizing the **Mean Squared Error (MSE)**. Adjust the **learning rate** and **iterations** below.
+by minimizing the **Mean Squared Error (MSE)**. Choose from different visualization modes below.
 """)
+
+# Initialize session state
+if 'full_history' not in st.session_state:
+    st.session_state.full_history = None
+if 'current_step' not in st.session_state:
+    st.session_state.current_step = 0
 
 col_controls, col_output = st.columns([1, 2])
 
 with col_controls:
     st.subheader("⚙️ Parameters")
-    learning_rate = st.slider("Learning Rate (η)", 0.00001, 0.001, 0.00005, format="%.6f")
-    max_iter = st.slider("Max Iterations", 100, 10000, 2000, step=100)
-    run = st.button("Run Gradient Descent")
+    
+    # Remove key parameters that might cause conflicts
+    learning_rate = st.slider(
+        "Learning Rate (η)", 
+        min_value=0.00001, 
+        max_value=0.001, 
+        value=0.00005, 
+        step=0.00001,
+        format="%.5f"
+    )
+    
+    max_iter = st.slider(
+        "Max Iterations", 
+        min_value=100, 
+        max_value=10000, 
+        value=2000, 
+        step=100
+    )
+    
+    # Add step size for visualization
+    step_increment = st.slider(
+        "Steps per Click", 
+        min_value=1, 
+        max_value=200, 
+        value=50, 
+        step=10,
+        help="Number of iterations to advance with each click"
+    )
+    
+    # Auto-reset when parameters change
+    if 'prev_lr' not in st.session_state:
+        st.session_state.prev_lr = learning_rate
+    if 'prev_iter' not in st.session_state:
+        st.session_state.prev_iter = max_iter
+    
+    if learning_rate != st.session_state.prev_lr or max_iter != st.session_state.prev_iter:
+        st.session_state.full_history = None
+        st.session_state.current_step = 0
+        st.session_state.prev_lr = learning_rate
+        st.session_state.prev_iter = max_iter
+        st.info("🔄 Parameters changed! Click any button to run with new settings.")
+    
+    st.markdown("---")
+    st.subheader("🎮 Visualization Controls")
+    
+    # Button styling with custom CSS
+    st.markdown("""
+    <style>
+    div.stButton > button {
+        width: 100%;
+        margin: 5px 0;
+    }
+    </style>
+    """, unsafe_allow_html=True)
+    
+    col1, col2 = st.columns(2)
+    
+    with col1:
+        if st.button("🚀 **Step Forward**", type="primary", use_container_width=True):
+            if st.session_state.full_history is None:
+                st.session_state.full_history = run_gradient_descent(learning_rate, max_iter)
+                st.session_state.current_step = 0
+            
+            # Increment by step_increment
+            new_step = min(st.session_state.current_step + step_increment, len(st.session_state.full_history) - 1)
+            st.session_state.current_step = new_step
+    
+    with col2:
+        if st.button("⏮️ **Reset**", use_container_width=True):
+            st.session_state.full_history = None
+            st.session_state.current_step = 0
+    
+    if st.button("🎯 **Show Convergence**", type="secondary", use_container_width=True):
+        if st.session_state.full_history is None:
+            st.session_state.full_history = run_gradient_descent(learning_rate, max_iter)
+        st.session_state.current_step = len(st.session_state.full_history) - 1
+    
+    if st.button("🎬 **Animate Steps**", use_container_width=True):
+        if st.session_state.full_history is None:
+            st.session_state.full_history = run_gradient_descent(learning_rate, max_iter)
+        
+        # Animation with larger step increments for performance
+        animation_steps = max(1, max_iter // 100)  # Show ~100 frames
+        
+        # Animation placeholder
+        with col_output:
+            placeholder = st.empty()
+            for step in range(0, len(st.session_state.full_history), animation_steps):
+                st.session_state.current_step = step
+                current_history = st.session_state.full_history[:step+1]
+                fig, loss = create_plot(current_history)
+                
+                with placeholder.container():
+                    st.pyplot(fig)
+                    
+                    # Use same KPI cards for animation
+                    hist_arr = np.array(current_history)
+                    prog_pct = (step / max_iter) * 100
+                    
+                    col_k1, col_k2, col_k3 = st.columns(3)
+                    with col_k1:
+                        st.markdown(f"""
+                        <div class="kpi-card iteration-card">
+                            <div class="kpi-title">📊 CURRENT ITERATION</div>
+                            <div class="kpi-value">{step:,}</div>
+                        </div>
+                        """, unsafe_allow_html=True)
+                    with col_k2:
+                        st.markdown(f"""
+                        <div class="kpi-card loss-card">
+                            <div class="kpi-title">🎯 MSE LOSS</div>
+                            <div class="kpi-value">{loss:.4f}</div>
+                        </div>
+                        """, unsafe_allow_html=True)
+                    with col_k3:
+                        st.markdown(f"""
+                        <div class="kpi-card progress-card">
+                            <div class="kpi-title">⚡ PROGRESS</div>
+                            <div class="kpi-value">{prog_pct:.1f}%</div>
+                        </div>
+                        """, unsafe_allow_html=True)
+                    
+                    col_k4, col_k5, col_k6 = st.columns(3)
+                    with col_k4:
+                        st.markdown(f"""
+                        <div class="kpi-card param-w-card">
+                            <div class="kpi-title">📈 SLOPE (w)</div>
+                            <div class="kpi-value">{hist_arr[-1,0]:.5f}</div>
+                        </div>
+                        """, unsafe_allow_html=True)
+                    with col_k5:
+                        st.markdown(f"""
+                        <div class="kpi-card param-b-card">
+                            <div class="kpi-title">📉 INTERCEPT (b)</div>
+                            <div class="kpi-value">{hist_arr[-1,1]:.5f}</div>
+                        </div>
+                        """, unsafe_allow_html=True)
+                    with col_k6:
+                        st.markdown(f"""
+                        <div class="kpi-card total-card">
+                            <div class="kpi-title">🔢 TOTAL ITERATIONS</div>
+                            <div class="kpi-value">{max_iter:,}</div>
+                        </div>
+                        """, unsafe_allow_html=True)
+                
+                plt.close(fig)
+                time.sleep(0.03)
+            
+            # Show final state
+            st.session_state.current_step = len(st.session_state.full_history) - 1
+            current_history = st.session_state.full_history
+            fig, loss = create_plot(current_history)
+            
+            with placeholder.container():
+                st.pyplot(fig)
+                
+                hist_final = np.array(current_history)
+                col_k1, col_k2, col_k3 = st.columns(3)
+                with col_k1:
+                    st.markdown(f"""
+                    <div class="kpi-card iteration-card">
+                        <div class="kpi-title">📊 CURRENT ITERATION</div>
+                        <div class="kpi-value">{max_iter:,}</div>
+                    </div>
+                    """, unsafe_allow_html=True)
+                with col_k2:
+                    st.markdown(f"""
+                    <div class="kpi-card loss-card">
+                        <div class="kpi-title">🎯 MSE LOSS</div>
+                        <div class="kpi-value">{loss:.4f}</div>
+                    </div>
+                    """, unsafe_allow_html=True)
+                with col_k3:
+                    st.markdown(f"""
+                    <div class="kpi-card progress-card">
+                        <div class="kpi-title">⚡ PROGRESS</div>
+                        <div class="kpi-value">100%</div>
+                    </div>
+                    """, unsafe_allow_html=True)
+                
+                col_k4, col_k5, col_k6 = st.columns(3)
+                with col_k4:
+                    st.markdown(f"""
+                    <div class="kpi-card param-w-card">
+                        <div class="kpi-title">📈 SLOPE (w)</div>
+                        <div class="kpi-value">{hist_final[-1,0]:.5f}</div>
+                    </div>
+                    """, unsafe_allow_html=True)
+                with col_k5:
+                    st.markdown(f"""
+                    <div class="kpi-card param-b-card">
+                        <div class="kpi-title">📉 INTERCEPT (b)</div>
+                        <div class="kpi-value">{hist_final[-1,1]:.5f}</div>
+                    </div>
+                    """, unsafe_allow_html=True)
+                with col_k6:
+                    st.markdown(f"""
+                    <div class="kpi-card total-card">
+                        <div class="kpi-title">🔢 TOTAL ITERATIONS</div>
+                        <div class="kpi-value">{max_iter:,}</div>
+                    </div>
+                    """, unsafe_allow_html=True)
+            
+            plt.close(fig)
+        
+        st.success("✅ Animation complete! Converged to minimum.")
 
-# Initialize
-w, b = 0.0, 0.0
-history = []
-
-if run:
-    w, b = 0.0, 0.0  # reset
-    history = [(w, b, mse_loss(x, y, w, b))]
-    for i in range(max_iter):
-        dw = grad_w(x, y, w, b)
-        db = grad_b(x, y, w, b)
-        w -= learning_rate * dw
-        b -= learning_rate * db
-        if i % max(1, max_iter // 200) == 0:  # subsample history for performance
-            history.append((w, b, mse_loss(x, y, w, b)))
-    final_loss = mse_loss(x, y, w, b)
-else:
-    final_loss = mse_loss(x, y, w, b)
-    history = [(w, b, final_loss)]
-
-# ----------------------------
-# PLOTTING
-# ----------------------------
-fig = plt.figure(figsize=(14, 5))
-
-# Left: Data + regression line
-ax1 = fig.add_subplot(1, 2, 1)
-ax1.scatter(x, y, color='#1f77b4', alpha=0.6, s=20, label='Data')
-x_plot = np.linspace(x.min(), x.max(), 100)
-y_plot = w * x_plot + b
-ax1.plot(x_plot, y_plot, color='red', linewidth=2, label=f'Fit: y = {w:.3f}x + {b:.2f}')
-ax1.set_xlabel("Spending")
-ax1.set_ylabel("Sales")
-ax1.set_title("Linear Regression Fit")
-ax1.legend()
-
-# Right: 3D loss surface + GD path
-ax2 = fig.add_subplot(1, 2, 2, projection='3d')
-surf = ax2.plot_surface(W, B, E, cmap='viridis', alpha=0.7, edgecolor='none')
-# Plot GD trajectory
-hist = np.array(history)
-ax2.plot(hist[:, 0], hist[:, 1], hist[:, 2], color='red', linewidth=2.5, marker='o', markersize=3, label='GD Path')
-ax2.set_xlabel("Slope (w)")
-ax2.set_ylabel("Intercept (b)")
-ax2.set_zlabel("MSE Loss")
-ax2.set_title("Loss Surface & Gradient Descent Path")
-ax2.view_init(elev=20, azim=-40)
-
+# Display current state
 with col_output:
-    st.pyplot(fig)
-    st.metric("Final MSE Loss", f"{final_loss:.6f}")
-    st.caption(f"Final parameters → w = {w:.5f}, b = {b:.5f}")
+    if st.session_state.full_history is not None:
+        current_history = st.session_state.full_history[:st.session_state.current_step+1]
+        fig, loss = create_plot(current_history)
+        
+        st.pyplot(fig)
+        plt.close(fig)
+        
+        # Custom CSS for colorful KPI cards
+        st.markdown("""
+        <style>
+        .kpi-card {
+            padding: 20px;
+            border-radius: 10px;
+            text-align: center;
+            color: white;
+            margin: 10px 0;
+            box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+        }
+        .kpi-title {
+            font-size: 14px;
+            font-weight: 500;
+            opacity: 0.9;
+            margin-bottom: 8px;
+        }
+        .kpi-value {
+            font-size: 32px;
+            font-weight: 700;
+        }
+        .iteration-card { background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); }
+        .loss-card { background: linear-gradient(135deg, #f093fb 0%, #f5576c 100%); }
+        .param-w-card { background: linear-gradient(135deg, #4facfe 0%, #00f2fe 100%); }
+        .param-b-card { background: linear-gradient(135deg, #43e97b 0%, #38f9d7 100%); }
+        .progress-card { background: linear-gradient(135deg, #fa709a 0%, #fee140 100%); }
+        .total-card { background: linear-gradient(135deg, #30cfd0 0%, #330867 100%); }
+        </style>
+        """, unsafe_allow_html=True)
+        
+        hist = np.array(current_history)
+        progress_pct = (st.session_state.current_step / max_iter) * 100
+        
+        # Row 1: Main KPIs
+        col_k1, col_k2, col_k3 = st.columns(3)
+        
+        with col_k1:
+            st.markdown(f"""
+            <div class="kpi-card iteration-card">
+                <div class="kpi-title">📊 CURRENT ITERATION</div>
+                <div class="kpi-value">{st.session_state.current_step:,}</div>
+            </div>
+            """, unsafe_allow_html=True)
+        
+        with col_k2:
+            st.markdown(f"""
+            <div class="kpi-card loss-card">
+                <div class="kpi-title">🎯 MSE LOSS</div>
+                <div class="kpi-value">{loss:.4f}</div>
+            </div>
+            """, unsafe_allow_html=True)
+        
+        with col_k3:
+            st.markdown(f"""
+            <div class="kpi-card progress-card">
+                <div class="kpi-title">⚡ PROGRESS</div>
+                <div class="kpi-value">{progress_pct:.1f}%</div>
+            </div>
+            """, unsafe_allow_html=True)
+        
+        # Row 2: Parameters
+        col_k4, col_k5, col_k6 = st.columns(3)
+        
+        with col_k4:
+            st.markdown(f"""
+            <div class="kpi-card param-w-card">
+                <div class="kpi-title">📈 SLOPE (w)</div>
+                <div class="kpi-value">{hist[-1,0]:.5f}</div>
+            </div>
+            """, unsafe_allow_html=True)
+        
+        with col_k5:
+            st.markdown(f"""
+            <div class="kpi-card param-b-card">
+                <div class="kpi-title">📉 INTERCEPT (b)</div>
+                <div class="kpi-value">{hist[-1,1]:.5f}</div>
+            </div>
+            """, unsafe_allow_html=True)
+        
+        with col_k6:
+            st.markdown(f"""
+            <div class="kpi-card total-card">
+                <div class="kpi-title">🔢 TOTAL ITERATIONS</div>
+                <div class="kpi-value">{max_iter:,}</div>
+            </div>
+            """, unsafe_allow_html=True)
+        
+        # Progress bar
+        progress = st.session_state.current_step / (len(st.session_state.full_history) - 1)
+        st.progress(progress)
+        
+        # Show if converged
+        if st.session_state.current_step == len(st.session_state.full_history) - 1:
+            st.success("✅ Gradient descent has converged to the minimum!")
+    else:
+        st.info("👈 Click **Step Forward** to start gradient descent, or **Animate Steps** to watch the full optimization!")
 
 # ----------------------------
 # FOOTER
